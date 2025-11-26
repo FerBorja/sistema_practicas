@@ -41,6 +41,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'reservas',    
+    'rest_framework_simplejwt',
+    'usuarios',
 ]
 
 MIDDLEWARE = [
@@ -134,6 +136,12 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.BasicAuthentication',
     ],
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
 }
 
 ORS_API_KEY = os.environ.get("ORS_API_KEY", "")
