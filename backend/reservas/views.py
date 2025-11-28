@@ -1,13 +1,12 @@
 from datetime import date, timedelta
 
 import requests
-from requests.exceptions import ReadTimeout, ConnectTimeout, RequestException
 from django.conf import settings
-from django.contrib.auth.models import User
 from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from .models import Chofer, Reserva, Vehiculo
 from .serializers import ReservaSerializer, VehiculoSerializer
@@ -20,18 +19,32 @@ class VehiculoViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ReservaViewSet(viewsets.ModelViewSet):
-    queryset = Reserva.objects.all().order_by('-created_at')
+    """
+    - Usuario estándar: ve sólo SUS reservas.
+    - Admin (perfil.rol == 'ADMIN' o is_staff/superuser): ve TODAS.
+    """
     serializer_class = ReservaSerializer
-    permission_classes = [permissions.AllowAny]  # luego IsAuthenticated
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Reserva.objects.all().order_by('-created_at')
+
+        if not user.is_authenticated:
+            return qs.none()
+
+        if self._es_admin(user):
+            return qs
+
+        # Usuario estándar
+        return qs.filter(usuario=user)
 
     def perform_create(self, serializer):
         """
-        Para demo: si no hay usuario autenticado, usamos el primer usuario.
-        Luego esto se cambia por auth real (JWT, etc.).
+        El usuario autenticado se guarda como 'usuario' de la reserva.
         """
         user = self.request.user
-        if not user.is_authenticated:
-            user = User.objects.first()
         serializer.save(usuario=user)
 
     # --------- /api/reservas/disponibilidad/ ---------
@@ -86,9 +99,7 @@ class ReservaViewSet(viewsets.ModelViewSet):
             )
         except Exception as e:
             return Response(
-                {
-                    'detail': f'No se pudo calcular la ruta con OpenRouteService: {e}'
-                },
+                {'detail': f'No se pudo calcular la ruta con OpenRouteService: {e}'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -115,7 +126,6 @@ class ReservaViewSet(viewsets.ModelViewSet):
 
         for vehiculo in vehiculos_qs:
             # 7.1 No exceder la capacidad del vehículo
-            #    (no puedes meter 20 personas en una VAN de 15)
             if personas_viajan > vehiculo.capacidad_pasajeros:
                 continue
 
@@ -125,9 +135,7 @@ class ReservaViewSet(viewsets.ModelViewSet):
                 continue
 
             # 7.3 Disponibilidad del vehículo en el rango de fechas (incluyendo 3 días de descanso)
-            if not self._vehiculo_disponible_en_fechas(
-                vehiculo, fecha_inicio, fecha_fin
-            ):
+            if not self._vehiculo_disponible_en_fechas(vehiculo, fecha_inicio, fecha_fin):
                 continue
 
             # 7.4 Choferes oficiales disponibles (si aplica)
@@ -153,6 +161,68 @@ class ReservaViewSet(viewsets.ModelViewSet):
             }
         )
 
+    # --------- Sugerencias de destino (autocomplete) ---------
+    @action(detail=False, methods=['get'], url_path='sugerencias-destino')
+    def sugerencias_destino(self, request):
+        """
+        GET /api/reservas/sugerencias-destino/?q=texto
+        Devuelve una lista de sugerencias para autocompletar destinos.
+        """
+        q = (request.query_params.get('q') or '').strip()
+        if len(q) < 3:
+            # Menos de 3 caracteres: no molestamos a la API, devolvemos vacío
+            return Response([], status=status.HTTP_200_OK)
+
+        try:
+            sugerencias = self._geocode_sugerencias_ors(q, max_resultados=5)
+        except Exception as e:
+            return Response(
+                {'detail': f'Error obteniendo sugerencias: {e}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(sugerencias, status=status.HTTP_200_OK)
+
+    # --------- Vista "Mis solicitudes" ---------
+    @action(detail=False, methods=['get'], url_path='mias')
+    def mias(self, request):
+        """
+        Devuelve sólo las reservas del usuario actual (aunque list()
+        ya filtra por usuario estándar, esto da un endpoint explícito).
+        """
+        reservas = Reserva.objects.filter(usuario=request.user).order_by('-created_at')
+        serializer = self.get_serializer(reservas, many=True)
+        return Response(serializer.data)
+
+    # --------- Acciones admin: autorizar / rechazar ---------
+    @action(detail=True, methods=['post'], url_path='autorizar')
+    def autorizar(self, request, pk=None):
+        if not self._es_admin(request.user):
+            return Response(
+                {'detail': 'No tienes permisos para autorizar reservas.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        reserva = self.get_object()
+        reserva.estado = 'AUTORIZADA'
+        reserva.save()
+        serializer = self.get_serializer(reserva)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='rechazar')
+    def rechazar(self, request, pk=None):
+        if not self._es_admin(request.user):
+            return Response(
+                {'detail': 'No tienes permisos para rechazar reservas.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        reserva = self.get_object()
+        reserva.estado = 'RECHAZADA'
+        reserva.save()
+        serializer = self.get_serializer(reserva)
+        return Response(serializer.data)
+
     # --------- Helpers ORS ---------
     def _obtener_duracion_y_estado_ors(self, destino_texto):
         """
@@ -170,39 +240,24 @@ class ReservaViewSet(viewsets.ModelViewSet):
             'Facultad de Ingeniería, UACH, Chihuahua, México',
         )
 
-        try:
-            # 1) Geocodificar origen y destino
-            o_lon, o_lat, _ = self._geocode_ors(origen_texto, api_key)
-            d_lon, d_lat, dest_region = self._geocode_ors(destino_texto, api_key)
+        # 1) Geocodificar origen y destino
+        o_lon, o_lat, _ = self._geocode_ors(origen_texto, api_key)
+        d_lon, d_lat, dest_region = self._geocode_ors(destino_texto, api_key)
 
-            # 2) Llamar a Directions (driving-car)
-            directions_url = 'https://api.openrouteservice.org/v2/directions/driving-car'
-            headers = {
-                'Authorization': api_key,
-                'Content-Type': 'application/json',
-            }
-            body = {
-                'coordinates': [
-                    [o_lon, o_lat],
-                    [d_lon, d_lat],
-                ]
-            }
+        # 2) Llamar a Directions (driving-car)
+        directions_url = 'https://api.openrouteservice.org/v2/directions/driving-car'
+        headers = {
+            'Authorization': api_key,
+            'Content-Type': 'application/json',
+        }
+        body = {
+            'coordinates': [
+                [o_lon, o_lat],
+                [d_lon, d_lat],
+            ]
+        }
 
-            # Timeout más corto y controlado
-            resp = requests.post(
-                directions_url,
-                headers=headers,
-                json=body,
-                timeout=10,
-            )
-        except (ReadTimeout, ConnectTimeout):
-            raise ValueError(
-                'Tiempo de espera agotado al consultar OpenRouteService. '
-                'Intenta de nuevo en unos minutos.'
-            )
-        except RequestException as e:
-            raise ValueError(f'Error de comunicación con OpenRouteService: {e}')
-
+        resp = requests.post(directions_url, headers=headers, json=body, timeout=15)
         data = resp.json()
 
         if resp.status_code != 200:
@@ -239,15 +294,7 @@ class ReservaViewSet(viewsets.ModelViewSet):
             'text': texto,
             'size': 1,
         }
-        try:
-            resp = requests.get(url, params=params, timeout=10)
-        except (ReadTimeout, ConnectTimeout):
-            raise ValueError(
-                'Tiempo de espera agotado al geocodificar con OpenRouteService.'
-            )
-        except RequestException as e:
-            raise ValueError(f'Error de comunicación con OpenRouteService: {e}')
-
+        resp = requests.get(url, params=params, timeout=10)
         data = resp.json()
 
         features = data.get('features') or []
@@ -263,10 +310,58 @@ class ReservaViewSet(viewsets.ModelViewSet):
         lon, lat = float(coords[0]), float(coords[1])
 
         props = feature.get('properties') or {}
-        # Pelias/ORS suele usar 'region' para la entidad tipo estado/region; también contemplamos 'state'
         region = props.get('region') or props.get('state') or props.get('county') or None
 
         return lon, lat, region
+
+    def _geocode_sugerencias_ors(self, texto, max_resultados=5):
+        """
+        Llama al geocoder de OpenRouteService y devuelve una lista de
+        sugerencias: [{ label, lat, lon, region }, ...]
+        """
+        api_key = getattr(settings, 'ORS_API_KEY', '')
+        if not api_key:
+            raise ValueError('No hay ORS_API_KEY configurada.')
+
+        url = 'https://api.openrouteservice.org/geocode/search'
+        params = {
+            'api_key': api_key,
+            'text': texto,
+            'size': max_resultados,
+        }
+        resp = requests.get(url, params=params, timeout=10)
+        data = resp.json()
+
+        features = data.get('features') or []
+        resultados = []
+
+        for feature in features:
+            geometry = feature.get('geometry') or {}
+            coords = geometry.get('coordinates') or []
+            if len(coords) < 2:
+                continue
+
+            lon, lat = float(coords[0]), float(coords[1])
+
+            props = feature.get('properties') or {}
+            label = props.get('label') or props.get('name') or texto
+            region = (
+                props.get('region')
+                or props.get('state')
+                or props.get('county')
+                or None
+            )
+
+            resultados.append(
+                {
+                    'label': label,
+                    'lat': lat,
+                    'lon': lon,
+                    'region': region,
+                }
+            )
+
+        return resultados
 
     # --------- Helpers internos ---------
     def _vehiculo_disponible_en_fechas(self, vehiculo, fecha_inicio, fecha_fin):
@@ -336,4 +431,21 @@ class ReservaViewSet(viewsets.ModelViewSet):
             return value
         if isinstance(value, str):
             return value.lower() in ['true', '1', 'yes', 'si', 'sí', 'on']
+        return False
+
+    def _es_admin(self, user):
+        """
+        Determina si un usuario es administrador a efectos del sistema
+        de vehículos oficiales.
+        """
+        if not user.is_authenticated:
+            return False
+
+        if user.is_staff or user.is_superuser:
+            return True
+
+        perfil = getattr(user, 'perfil', None)
+        if perfil and getattr(perfil, 'rol', None) == 'ADMIN':
+            return True
+
         return False

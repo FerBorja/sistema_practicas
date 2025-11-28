@@ -1,7 +1,9 @@
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from .models import PerfilUsuario
+
+User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -11,11 +13,26 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class PerfilUsuarioSerializer(serializers.ModelSerializer):
+    """
+    Devuelve:
+    {
+      "user": { ...datos básicos del User... },
+      "email": "usuario@uach.mx",
+      "nombre_completo": "Nombre Apellido",
+      "matricula_o_empleado": "...",
+      "rol": "ESTANDAR" | "ADMIN"
+    }
+    """
     user = UserSerializer(read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    nombre_completo = serializers.CharField(
+        source='user.first_name',
+        read_only=True,
+    )
 
     class Meta:
         model = PerfilUsuario
-        fields = ['user', 'matricula_o_empleado', 'rol']
+        fields = ['user', 'email', 'nombre_completo', 'matricula_o_empleado', 'rol']
 
 
 class RegistroSerializer(serializers.Serializer):

@@ -1,3 +1,24 @@
+/* ---------------- Layout general ---------------- */
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #e5e5e5;
+}
+
+/* Contenedor principal */
+
+.app-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+  background: #fff;
+  color: #222; /* texto oscuro por defecto */
+}
+
+/* ---------------- Formularios ---------------- */
+
+.auth-form,
 .reserva-form {
   margin-top: 1rem;
   display: flex;
@@ -12,16 +33,68 @@
   gap: 1rem;
 }
 
-.reserva-form label {
+.reserva-form label,
+.auth-form label {
   display: flex;
   flex-direction: column;
   font-size: 0.9rem;
 }
 
 .reserva-form input,
-.reserva-form select {
+.reserva-form select,
+.auth-form input {
   padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  font-size: 0.9rem;
 }
+
+/* ---------------- Botones ---------------- */
+
+button {
+  padding: 0.4rem 0.9rem;
+  border-radius: 4px;
+  border: 1px solid #0066cc;
+  background: #0077ff;
+  color: #fff;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+button[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+button:hover:not([disabled]) {
+  background: #005fcb;
+}
+
+/* ---------------- Tablas ---------------- */
+
+.vehiculos-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.vehiculos-table th,
+.vehiculos-table td {
+  border: 1px solid #ddd;
+  padding: 0.4rem 0.5rem;
+}
+
+.vehiculos-table th {
+  background: #f3f3f3;
+  text-align: left;
+}
+
+.vehiculos-table tr:nth-child(even) {
+  background: #fafafa;
+}
+
+/* ---------------- Mensajes / hints ---------------- */
 
 .hint-box {
   margin-top: 0.5rem;
@@ -37,7 +110,65 @@
   color: #222;
 }
 
-.app-container {
+.error {
+  color: #b00020;
+  font-size: 0.9rem;
+}
+
+/* ---------------- Autocomplete destino (opcional) ---------------- */
+/* Estas clases son por si quieres mover los estilos inline del JSX a CSS */
+
+.destino-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+}
+
+.destino-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  max-height: 150px;
+  overflow-y: auto;
   background: #fff;
-  color: #222; /* texto oscuro por defecto */
+  z-index: 10;
+}
+
+.destino-suggestions li {
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.destino-suggestions li:last-child {
+  border-bottom: none;
+}
+
+.destino-suggestions li:hover {
+  background: #f5f5f5;
+}
+
+/* ---------------- Mapa destino (opcional) ---------------- */
+
+.destino-map {
+  margin-top: 0.5rem;
+  width: 100%;
+  max-width: 600px;
+  height: 300px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.destino-map iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none; /* hace el mapa "no interactivo" para el usuario */
 }

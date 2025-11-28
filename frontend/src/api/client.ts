@@ -1,3 +1,4 @@
+// frontend/src/api/client.ts
 import axios from 'axios'
 
 const API_BASE_URL =
@@ -13,6 +14,21 @@ export interface Vehiculo {
   activo: boolean
 }
 
+// Instancia de axios para toda la app
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
 })
+
+/**
+ * Devuelve los headers de autenticación (JWT Bearer)
+ * si hay token en localStorage.
+ */
+export function getAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem('token')
+  if (!token) {
+    return {}
+  }
+  return {
+    Authorization: `Bearer ${token}`,
+  }
+}
